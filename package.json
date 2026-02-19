@@ -1,0 +1,26 @@
+{
+  "name": "ai-sdk-openai-websocket-demo",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx server.mts",
+    "build": "next build",
+    "start": "NODE_ENV=production tsx server.mts"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "^3",
+    "ai": "^6",
+    "next": "^15",
+    "react": "^18",
+    "react-dom": "^18",
+    "ws": "^8"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/ws": "^8",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}
