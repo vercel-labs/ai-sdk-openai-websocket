@@ -1,7 +1,10 @@
 import { createServer } from 'node:http';
 import { parse } from 'node:url';
+import { join } from 'node:path';
 import next from 'next';
 import WebSocket, { WebSocketServer } from 'ws';
+import { createBashTool } from 'bash-tool';
+import { loadDocsFromDisk } from './lib/load-docs.mts';
 
 const dev = process.env.NODE_ENV !== 'production';
 const app = next({ dev });
@@ -9,6 +12,60 @@ const handle = app.getRequestHandler();
 
 const OPENAI_WS_URL = 'wss://api.openai.com/v1/responses';
 const MODEL = 'gpt-4.1-mini';
+const MAX_STEPS = 30;
+
+// Load docs once at startup
+const docsDir = join(import.meta.dirname, 'content', 'docs');
+const docsFiles = loadDocsFromDisk(docsDir);
+console.log(`Loaded ${Object.keys(docsFiles).length} doc files from ${docsDir}`);
+
+const SYSTEM_PROMPT = `You are an AI SDK documentation assistant. You have access to the Vercel AI SDK documentation in /workspace/docs/. Use your tools to explore the docs, answer questions, and create or modify documentation files.
+
+Always start by exploring the available files to understand the structure before answering. Use bash commands like ls, find, and grep to explore, then read specific files for details.
+
+When writing new documentation, follow the patterns and conventions you observe in the existing docs.`;
+
+const toolDefinitions = [
+  {
+    type: 'function' as const,
+    name: 'bash',
+    description:
+      'Execute a bash command in the workspace. Available commands: ls, cat, head, tail, find, grep, sed, echo, mkdir, cp, mv, rm, wc, sort, etc.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'The bash command to execute' },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    type: 'function' as const,
+    name: 'readFile',
+    description: 'Read the contents of a file at the given path.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute file path' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    type: 'function' as const,
+    name: 'writeFile',
+    description:
+      'Write content to a file, creating it and parent dirs if needed.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute file path' },
+        content: { type: 'string', description: 'File content to write' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+];
 
 interface MessagePart {
   type: string;
@@ -19,6 +76,12 @@ interface ClientMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   parts: MessagePart[];
+}
+
+interface PendingToolCall {
+  call_id: string;
+  name: string;
+  arguments: string;
 }
 
 function convertToOpenAIInput(messages: ClientMessage[]) {
@@ -49,6 +112,15 @@ function connectToOpenAI(): Promise<WebSocket> {
   });
 }
 
+async function createTools() {
+  const files: Record<string, string> = {};
+  for (const [name, content] of Object.entries(docsFiles)) {
+    files[`docs/${name}`] = content;
+  }
+  const { tools } = await createBashTool({ files });
+  return tools;
+}
+
 app.prepare().then(() => {
   const server = createServer((req, res) => {
     handle(req, res, parse(req.url!, true));
@@ -68,29 +140,36 @@ app.prepare().then(() => {
   });
 
   wss.on('connection', clientWs => {
+    console.log('[ws] Client connected');
     let openaiWs: WebSocket | null = null;
     let previousResponseId: string | null = null;
 
-    // Permanent listener to always track previousResponseId
-    function trackResponseId(raw: WebSocket.RawData) {
-      try {
-        const event = JSON.parse(raw.toString());
-        if (event.type === 'response.completed') {
-          previousResponseId = event.response.id;
-        }
-      } catch {
-        // ignore parse errors
+    // Each client gets its own bash tools instance (created lazily)
+    let bashToolsPromise: Promise<Record<string, any>> | null = null;
+    function getBashTools() {
+      if (!bashToolsPromise) {
+        console.log('[ws] Creating bash tools...');
+        bashToolsPromise = createTools().then(tools => {
+          console.log('[ws] Bash tools ready');
+          return tools;
+        });
       }
+      return bashToolsPromise;
     }
 
     async function ensureOpenAI(): Promise<WebSocket> {
       if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
         return openaiWs;
       }
+      console.log('[ws] Connecting to OpenAI...');
       openaiWs = await connectToOpenAI();
-      openaiWs.on('message', trackResponseId);
-      openaiWs.on('close', () => {
+      console.log('[ws] OpenAI connected');
+      openaiWs.on('close', (code, reason) => {
+        console.log(`[ws] OpenAI disconnected: ${code} ${reason}`);
         openaiWs = null;
+      });
+      openaiWs.on('error', err => {
+        console.error('[ws] OpenAI WS error:', err.message);
       });
       return openaiWs;
     }
@@ -101,13 +180,17 @@ app.prepare().then(() => {
           requestId: string;
           messages: ClientMessage[];
         };
+        console.log(`[ws] Received message requestId=${requestId}, ${messages.length} messages`);
 
-        const ws = await ensureOpenAI();
+        const [ws, bashTools] = await Promise.all([
+          ensureOpenAI(),
+          getBashTools(),
+        ]);
+        console.log('[ws] OpenAI + bash tools ready');
 
         // Build OpenAI input
         let input;
         if (previousResponseId) {
-          // Incremental: only send the last user message
           const lastUserMessage = [...messages]
             .reverse()
             .find(m => m.role === 'user');
@@ -118,8 +201,7 @@ app.prepare().then(() => {
           input = convertToOpenAIInput(messages);
         }
 
-        const textPartId = `text-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-        let isFirstDelta = true;
+        let stepCount = 0;
 
         function send(chunk: Record<string, unknown>) {
           if (clientWs.readyState === WebSocket.OPEN) {
@@ -127,67 +209,234 @@ app.prepare().then(() => {
           }
         }
 
-        function onOpenAIMessage(rawMsg: WebSocket.RawData) {
-          try {
-            const event = JSON.parse(rawMsg.toString());
+        function handleOpenAIResponse(
+          ws: WebSocket,
+          input: unknown[],
+          prevResponseId: string | null,
+          isFirstResponse: boolean,
+        ) {
+          let pendingToolCalls: PendingToolCall[] = [];
+          let textPartId = '';
+          let isFirstDelta = true;
 
-            switch (event.type) {
-              case 'response.created':
-                send({
-                  type: 'start',
-                  messageId: `msg-${event.response.id}`,
-                });
-                send({ type: 'start-step' });
-                break;
+          function onMessage(rawMsg: WebSocket.RawData) {
+            try {
+              const event = JSON.parse(rawMsg.toString());
+              console.log(`[openai] Event: ${event.type}`);
 
-              case 'response.output_text.delta':
-                if (isFirstDelta) {
-                  send({ type: 'text-start', id: textPartId });
-                  isFirstDelta = false;
+              switch (event.type) {
+                case 'response.created':
+                  if (isFirstResponse) {
+                    send({
+                      type: 'start',
+                      messageId: `msg-${event.response.id}`,
+                    });
+                  }
+                  send({ type: 'start-step' });
+                  break;
+
+                case 'response.output_text.delta':
+                  if (isFirstDelta) {
+                    textPartId = `text-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+                    send({ type: 'text-start', id: textPartId });
+                    isFirstDelta = false;
+                  }
+                  send({
+                    type: 'text-delta',
+                    id: textPartId,
+                    delta: event.delta,
+                  });
+                  break;
+
+                case 'response.output_text.done':
+                  send({ type: 'text-end', id: textPartId });
+                  break;
+
+                case 'response.output_item.added':
+                  if (event.item?.type === 'function_call') {
+                    send({
+                      type: 'tool-input-start',
+                      toolCallId: `tool-${event.item.call_id}`,
+                      toolName: event.item.name,
+                      dynamic: true,
+                    });
+                    pendingToolCalls.push({
+                      call_id: event.item.call_id,
+                      name: event.item.name,
+                      arguments: '',
+                    });
+                  }
+                  break;
+
+                case 'response.function_call_arguments.delta': {
+                  const tc = pendingToolCalls.find(
+                    t => t.call_id === event.item_id,
+                  );
+                  if (tc) {
+                    const toolCallId = `tool-${tc.call_id}`;
+                    send({
+                      type: 'tool-input-delta',
+                      toolCallId,
+                      inputTextDelta: event.delta,
+                    });
+                  }
+                  break;
                 }
-                send({
-                  type: 'text-delta',
-                  id: textPartId,
-                  delta: event.delta,
-                });
-                break;
 
-              case 'response.output_text.done':
-                send({ type: 'text-end', id: textPartId });
-                break;
+                case 'response.output_item.done':
+                  if (event.item?.type === 'function_call') {
+                    const tc = pendingToolCalls.find(
+                      t => t.call_id === event.item.call_id,
+                    );
+                    if (tc) {
+                      tc.arguments = event.item.arguments;
+                      let parsedInput: unknown;
+                      try {
+                        parsedInput = JSON.parse(tc.arguments);
+                      } catch {
+                        parsedInput = tc.arguments;
+                      }
+                      send({
+                        type: 'tool-input-available',
+                        toolCallId: `tool-${tc.call_id}`,
+                        toolName: tc.name,
+                        input: parsedInput,
+                        dynamic: true,
+                      });
+                    }
+                  }
+                  break;
 
-              case 'response.completed':
-                send({ type: 'finish-step' });
-                send({ type: 'finish', finishReason: 'stop' });
-                ws.off('message', onOpenAIMessage);
-                break;
+                case 'response.completed': {
+                  previousResponseId = event.response.id;
+                  ws.off('message', onMessage);
 
-              case 'error':
-                send({
-                  type: 'error',
-                  errorText: event.error?.message ?? 'Unknown OpenAI error',
-                });
-                ws.off('message', onOpenAIMessage);
-                break;
+                  // Check if there are function calls to handle
+                  const functionCalls = (event.response.output || []).filter(
+                    (o: { type: string }) => o.type === 'function_call',
+                  );
+
+                  if (functionCalls.length > 0 && stepCount < MAX_STEPS) {
+                    stepCount++;
+
+                    // Execute tools and continue
+                    (async () => {
+                      const toolOutputs: {
+                        type: string;
+                        call_id: string;
+                        output: string;
+                      }[] = [];
+
+                      for (const fc of functionCalls) {
+                        let args: Record<string, string> = {};
+                        try {
+                          args = JSON.parse(fc.arguments);
+                        } catch {
+                          // ignore parse errors
+                        }
+
+                        let result: string;
+                        try {
+                          console.log(`[tool] Executing ${fc.name}:`, JSON.stringify(args).substring(0, 200));
+                          const toolResult = await bashTools[fc.name].execute(args);
+                          result =
+                            typeof toolResult === 'string'
+                              ? toolResult
+                              : JSON.stringify(toolResult);
+                        } catch (err) {
+                          result = `Error: ${err instanceof Error ? err.message : String(err)}`;
+                        }
+
+                        const toolCallId = `tool-${fc.call_id}`;
+
+                        // Truncate very long results
+                        const truncatedResult =
+                          result.length > 10000
+                            ? result.substring(0, 10000) + '\n... (truncated)'
+                            : result;
+
+                        send({
+                          type: 'tool-output-available',
+                          toolCallId,
+                          output: truncatedResult,
+                          dynamic: true,
+                        });
+
+                        toolOutputs.push({
+                          type: 'function_call_output',
+                          call_id: fc.call_id,
+                          output: truncatedResult,
+                        });
+                      }
+
+                      // Finish current step, start next
+                      send({ type: 'finish-step' });
+
+                      // Continue the conversation with tool results
+                      handleOpenAIResponse(
+                        ws,
+                        toolOutputs,
+                        previousResponseId,
+                        false,
+                      );
+
+                      const continueBody: Record<string, unknown> = {
+                        type: 'response.create',
+                        model: MODEL,
+                        instructions: SYSTEM_PROMPT,
+                        tools: toolDefinitions,
+                        input: toolOutputs,
+                      };
+                      if (previousResponseId) {
+                        continueBody.previous_response_id =
+                          previousResponseId;
+                      }
+                      ws.send(JSON.stringify(continueBody));
+                    })();
+                  } else {
+                    // No tool calls or max steps reached — done
+                    send({ type: 'finish-step' });
+                    send({ type: 'finish', finishReason: 'stop' });
+                  }
+                  break;
+                }
+
+                case 'error':
+                  send({
+                    type: 'error',
+                    errorText:
+                      event.error?.message ?? 'Unknown OpenAI error',
+                  });
+                  ws.off('message', onMessage);
+                  break;
+              }
+            } catch (err) {
+              console.error('[openai] Error processing event:', err);
             }
-          } catch {
-            // ignore parse errors
           }
+
+          ws.on('message', onMessage);
         }
 
-        ws.on('message', onOpenAIMessage);
+        // Set up the handler for this response
+        handleOpenAIResponse(ws, input, previousResponseId, true);
 
+        // Send the initial request
         const body: Record<string, unknown> = {
           type: 'response.create',
           model: MODEL,
+          instructions: SYSTEM_PROMPT,
+          tools: toolDefinitions,
           input,
         };
         if (previousResponseId) {
           body.previous_response_id = previousResponseId;
         }
 
+        console.log('[ws] Sending request to OpenAI');
         ws.send(JSON.stringify(body));
       } catch (err) {
+        console.error('[ws] Error in message handler:', err);
         const errorMessage =
           err instanceof Error ? err.message : 'Internal server error';
         clientWs.send(

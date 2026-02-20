@@ -105,3 +105,101 @@ body {
   color: #fff;
   margin-top: 0.5rem;
 }
+
+/* Tool call styles */
+.tool-call {
+  margin: 0.5rem 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.375rem;
+  background: #f8fafc;
+  font-size: 0.8125rem;
+  overflow: hidden;
+}
+
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.tool-call-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+  flex-shrink: 0;
+}
+
+.tool-call-indicator.streaming {
+  background: #f59e0b;
+  animation: pulse 1s infinite;
+}
+
+.tool-call-indicator.executing {
+  background: #3b82f6;
+  animation: pulse 1s infinite;
+}
+
+.tool-call-indicator.done {
+  background: #22c55e;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.tool-call-name {
+  font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
+  font-weight: 600;
+  color: #334155;
+}
+
+.tool-call-state {
+  color: #94a3b8;
+  font-size: 0.75rem;
+  margin-left: auto;
+}
+
+.tool-call-section {
+  border-top: 1px solid #e5e7eb;
+}
+
+.tool-call-toggle {
+  display: block;
+  width: 100%;
+  padding: 0.25rem 0.625rem;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 0.75rem;
+  color: #64748b;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.tool-call-toggle:hover {
+  background: #f1f5f9;
+}
+
+.tool-call-content {
+  padding: 0.375rem 0.625rem;
+  margin: 0;
+  font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #334155;
+  background: #fff;
+  max-height: 300px;
+  overflow-y: auto;
+}
