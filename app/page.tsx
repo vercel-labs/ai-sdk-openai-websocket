@@ -466,6 +466,7 @@ export default function Chat() {
           name="message"
           placeholder="Type a message..."
           disabled={!isReady}
+          defaultValue="What are all the different ways to handle streaming in the AI SDK? Find every doc that mentions streaming, summarize the different approaches, and show example code for each."
         />
         <button type="submit" disabled={!isReady}>
           Send
