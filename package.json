@@ -3,9 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "tsx server.mts",
+    "dev": "next dev",
     "build": "next build",
-    "start": "NODE_ENV=production tsx server.mts"
+    "start": "next start"
   },
   "dependencies": {
     "@ai-sdk/react": "^3",

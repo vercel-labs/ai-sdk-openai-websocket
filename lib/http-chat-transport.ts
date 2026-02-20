@@ -1,12 +1,25 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
-import type { ResponseStats } from './websocket-chat-transport';
+
+export interface ResponseStats {
+  startTime: number;
+  steps: number;
+  toolCalls: number;
+  stepLatencies: number[];
+  stepTtfbs: number[];
+  stepResponseIds: string[];
+  currentStepStartTime: number | null;
+  endTime: number | null;
+  tokens: { input: number; inputCached: number; output: number } | null;
+  toolCallSteps: Record<string, number>;
+  messageId: string;
+}
 
 export class HttpChatTransport implements ChatTransport<UIMessage> {
-  private sessionId: string;
+  private endpoint: string;
   onStatsUpdate?: (messageId: string, stats: ResponseStats) => void;
 
-  constructor() {
-    this.sessionId = Math.random().toString(36).substring(2, 15);
+  constructor({ endpoint = '/api/chat' }: { endpoint?: string } = {}) {
+    this.endpoint = endpoint;
   }
 
   async sendMessages({
@@ -15,10 +28,10 @@ export class HttpChatTransport implements ChatTransport<UIMessage> {
   }: Parameters<ChatTransport<UIMessage>['sendMessages']>[0]): Promise<
     ReadableStream<UIMessageChunk>
   > {
-    const response = await fetch('/api/chat', {
+    const response = await fetch(this.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: this.sessionId, messages }),
+      body: JSON.stringify({ messages }),
       signal: abortSignal,
     });
 

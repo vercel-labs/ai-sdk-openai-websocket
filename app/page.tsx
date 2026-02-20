@@ -2,20 +2,13 @@
 
 import { useChat, type UIMessage } from '@ai-sdk/react';
 import {
-  WebSocketChatTransport,
+  HttpChatTransport,
   type ResponseStats,
-} from '@/lib/websocket-chat-transport';
-import { HttpChatTransport } from '@/lib/http-chat-transport';
+} from '@/lib/http-chat-transport';
 import { useState, useEffect } from 'react';
 
-const wsTransport = new WebSocketChatTransport({
-  url:
-    typeof window !== 'undefined'
-      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
-      : 'ws://localhost:3000/ws',
-});
-
-const httpTransport = new HttpChatTransport();
+const wsTransport = new HttpChatTransport({ endpoint: '/api/chat-ws' });
+const httpTransport = new HttpChatTransport({ endpoint: '/api/chat' });
 
 function ToolCall({
   part,
