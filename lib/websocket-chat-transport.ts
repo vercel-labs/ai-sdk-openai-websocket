@@ -5,6 +5,7 @@ export interface ResponseStats {
   steps: number;
   toolCalls: number;
   stepLatencies: number[];
+  stepResponseIds: string[];
   currentStepStartTime: number | null;
   endTime: number | null;
   tokens: { input: number; inputCached: number; output: number } | null;
@@ -65,6 +66,7 @@ export class WebSocketChatTransport implements ChatTransport<UIMessage> {
             transport.onStatsUpdate(stats.messageId, {
               ...stats,
               stepLatencies: [...stats.stepLatencies],
+              stepResponseIds: [...stats.stepResponseIds],
               toolCallSteps: { ...stats.toolCallSteps },
             });
           }
@@ -93,6 +95,7 @@ export class WebSocketChatTransport implements ChatTransport<UIMessage> {
                 steps: 0,
                 toolCalls: 0,
                 stepLatencies: [],
+                stepResponseIds: [],
                 currentStepStartTime: null,
                 endTime: null,
                 tokens: null,
@@ -105,6 +108,9 @@ export class WebSocketChatTransport implements ChatTransport<UIMessage> {
               if (stats) {
                 stats.steps++;
                 stats.currentStepStartTime = Date.now();
+                if (chunk.responseId) {
+                  stats.stepResponseIds.push(chunk.responseId);
+                }
                 notifyStats();
               }
               break;

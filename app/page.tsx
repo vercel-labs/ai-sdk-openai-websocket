@@ -222,6 +222,18 @@ function MessageList({
   );
 }
 
+function mean(values: number[]): number {
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
 function LatencyComparison({
   wsStats,
   httpStats,
@@ -236,6 +248,20 @@ function LatencyComparison({
   const wsTotal = wsStats.endTime! - wsStats.startTime;
   const httpTotal = httpStats.endTime! - httpStats.startTime;
   const totalDiff = httpTotal - wsTotal;
+
+  const wsAvg =
+    wsStats.stepLatencies.length > 0 ? mean(wsStats.stepLatencies) : null;
+  const httpAvg =
+    httpStats.stepLatencies.length > 0 ? mean(httpStats.stepLatencies) : null;
+  const wsMedian =
+    wsStats.stepLatencies.length > 0 ? median(wsStats.stepLatencies) : null;
+  const httpMedian =
+    httpStats.stepLatencies.length > 0 ? median(httpStats.stepLatencies) : null;
+
+  const avgDiff =
+    wsAvg != null && httpAvg != null ? httpAvg - wsAvg : null;
+  const medianDiff =
+    wsMedian != null && httpMedian != null ? httpMedian - wsMedian : null;
 
   return (
     <div className="latency-comparison">
@@ -253,9 +279,21 @@ function LatencyComparison({
             const ws = wsStats.stepLatencies[i];
             const http = httpStats.stepLatencies[i];
             const diff = ws != null && http != null ? http - ws : null;
+            const wsRespId = wsStats.stepResponseIds[i];
+            const httpRespId = httpStats.stepResponseIds[i];
             return (
               <tr key={i}>
-                <td>Step {i + 1}</td>
+                <td>
+                  Step {i + 1}
+                  {(wsRespId || httpRespId) && (
+                    <div className="step-response-ids">
+                      {wsRespId && <span title={wsRespId}>ws: {wsRespId}</span>}
+                      {httpRespId && (
+                        <span title={httpRespId}>http: {httpRespId}</span>
+                      )}
+                    </div>
+                  )}
+                </td>
                 <td>{ws != null ? `${(ws / 1000).toFixed(1)}s` : '—'}</td>
                 <td>
                   {http != null ? `${(http / 1000).toFixed(1)}s` : '—'}
@@ -279,6 +317,46 @@ function LatencyComparison({
             <td className={totalDiff > 0 ? 'slower' : 'faster'}>
               {totalDiff > 0 ? '+' : ''}
               {(totalDiff / 1000).toFixed(1)}s
+            </td>
+          </tr>
+          <tr className="summary-row">
+            <td>Avg</td>
+            <td>{wsAvg != null ? `${(wsAvg / 1000).toFixed(3)}s` : '—'}</td>
+            <td>
+              {httpAvg != null ? `${(httpAvg / 1000).toFixed(3)}s` : '—'}
+            </td>
+            <td
+              className={
+                avgDiff != null ? (avgDiff > 0 ? 'slower' : 'faster') : ''
+              }
+            >
+              {avgDiff != null
+                ? `${avgDiff > 0 ? '+' : ''}${(avgDiff / 1000).toFixed(3)}s`
+                : '—'}
+            </td>
+          </tr>
+          <tr className="summary-row">
+            <td>Median</td>
+            <td>
+              {wsMedian != null ? `${(wsMedian / 1000).toFixed(3)}s` : '—'}
+            </td>
+            <td>
+              {httpMedian != null
+                ? `${(httpMedian / 1000).toFixed(3)}s`
+                : '—'}
+            </td>
+            <td
+              className={
+                medianDiff != null
+                  ? medianDiff > 0
+                    ? 'slower'
+                    : 'faster'
+                  : ''
+              }
+            >
+              {medianDiff != null
+                ? `${medianDiff > 0 ? '+' : ''}${(medianDiff / 1000).toFixed(3)}s`
+                : '—'}
             </td>
           </tr>
         </tbody>

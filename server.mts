@@ -272,7 +272,7 @@ async function handleHttpChat(req: IncomingMessage, res: ServerResponse) {
               });
               isFirstResponse = false;
             }
-            send({ type: 'start-step' });
+            send({ type: 'start-step', responseId: event.response.id });
             break;
 
           case 'response.output_text.delta':
@@ -579,7 +579,7 @@ app.prepare().then(() => {
                       messageId: `msg-${event.response.id}`,
                     });
                   }
-                  send({ type: 'start-step' });
+                  send({ type: 'start-step', responseId: event.response.id });
                   break;
 
                 case 'response.output_text.delta':
