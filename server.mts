@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { parse } from 'node:url';
 import { join } from 'node:path';
 import next from 'next';
@@ -121,8 +121,354 @@ async function createTools() {
   return tools;
 }
 
+// --- HTTP streaming endpoint ---
+
+const OPENAI_API_URL = 'https://api.openai.com/v1/responses';
+
+const httpSessions = new Map<
+  string,
+  {
+    previousResponseId: string | null;
+    bashToolsPromise: Promise<Record<string, any>> | null;
+  }
+>();
+
+async function handleHttpChat(req: IncomingMessage, res: ServerResponse) {
+  const rawBody = await new Promise<string>((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk: Buffer) => {
+      data += chunk.toString();
+    });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+
+  const { sessionId, messages } = JSON.parse(rawBody) as {
+    sessionId: string;
+    messages: ClientMessage[];
+  };
+
+  console.log(
+    `[http] Request sessionId=${sessionId}, ${messages.length} messages`,
+  );
+
+  if (!httpSessions.has(sessionId)) {
+    httpSessions.set(sessionId, {
+      previousResponseId: null,
+      bashToolsPromise: null,
+    });
+  }
+  const session = httpSessions.get(sessionId)!;
+
+  if (!session.bashToolsPromise) {
+    session.bashToolsPromise = createTools();
+  }
+  const bashTools = await session.bashToolsPromise;
+
+  let input;
+  if (session.previousResponseId) {
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find(m => m.role === 'user');
+    input = lastUserMessage ? convertToOpenAIInput([lastUserMessage]) : [];
+  } else {
+    input = convertToOpenAIInput(messages);
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Transfer-Encoding': 'chunked',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+
+  let cumulativeTokens = { input: 0, inputCached: 0, output: 0 };
+  let stepCount = 0;
+  let isFirstResponse = true;
+
+  function send(chunk: Record<string, unknown>) {
+    if (!res.destroyed) {
+      res.write(JSON.stringify(chunk) + '\n');
+    }
+  }
+
+  async function runStep(
+    stepInput: unknown[],
+    prevResponseId: string | null,
+  ): Promise<void> {
+    const requestBody: Record<string, unknown> = {
+      model: MODEL,
+      instructions: SYSTEM_PROMPT,
+      tools: toolDefinitions,
+      input: stepInput,
+      stream: true,
+    };
+    if (prevResponseId) {
+      requestBody.previous_response_id = prevResponseId;
+    }
+
+    console.log('[http] Sending request to OpenAI');
+    const apiResponse = await fetch(OPENAI_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!apiResponse.ok) {
+      const errorText = await apiResponse.text();
+      console.error(
+        `[http] OpenAI API error: ${apiResponse.status}`,
+        errorText.substring(0, 200),
+      );
+      send({
+        type: 'error',
+        errorText: `OpenAI API error: ${apiResponse.status}`,
+      });
+      return;
+    }
+
+    const reader = apiResponse.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let pendingToolCalls: PendingToolCall[] = [];
+    let textPartId = '';
+    let isFirstDelta = true;
+    let completedEvent: any = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      let eventEnd;
+      while ((eventEnd = buffer.indexOf('\n\n')) !== -1) {
+        const eventText = buffer.slice(0, eventEnd);
+        buffer = buffer.slice(eventEnd + 2);
+
+        const dataLine = eventText
+          .split('\n')
+          .find(l => l.startsWith('data: '));
+        if (!dataLine) continue;
+        const data = dataLine.slice(6);
+        if (data === '[DONE]') continue;
+
+        let event;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          continue;
+        }
+
+        switch (event.type) {
+          case 'response.created':
+            if (isFirstResponse) {
+              send({
+                type: 'start',
+                messageId: `msg-${event.response.id}`,
+              });
+              isFirstResponse = false;
+            }
+            send({ type: 'start-step' });
+            break;
+
+          case 'response.output_text.delta':
+            if (isFirstDelta) {
+              textPartId = `text-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+              send({ type: 'text-start', id: textPartId });
+              isFirstDelta = false;
+            }
+            send({
+              type: 'text-delta',
+              id: textPartId,
+              delta: event.delta,
+            });
+            break;
+
+          case 'response.output_text.done':
+            send({ type: 'text-end', id: textPartId });
+            break;
+
+          case 'response.output_item.added':
+            if (event.item?.type === 'function_call') {
+              send({
+                type: 'tool-input-start',
+                toolCallId: `tool-${event.item.call_id}`,
+                toolName: event.item.name,
+                dynamic: true,
+              });
+              pendingToolCalls.push({
+                call_id: event.item.call_id,
+                name: event.item.name,
+                arguments: '',
+              });
+            }
+            break;
+
+          case 'response.function_call_arguments.delta': {
+            const tc = pendingToolCalls.find(
+              t => t.call_id === event.item_id,
+            );
+            if (tc) {
+              send({
+                type: 'tool-input-delta',
+                toolCallId: `tool-${tc.call_id}`,
+                inputTextDelta: event.delta,
+              });
+            }
+            break;
+          }
+
+          case 'response.output_item.done':
+            if (event.item?.type === 'function_call') {
+              const tc = pendingToolCalls.find(
+                t => t.call_id === event.item.call_id,
+              );
+              if (tc) {
+                tc.arguments = event.item.arguments;
+                let parsedInput: unknown;
+                try {
+                  parsedInput = JSON.parse(tc.arguments);
+                } catch {
+                  parsedInput = tc.arguments;
+                }
+                send({
+                  type: 'tool-input-available',
+                  toolCallId: `tool-${tc.call_id}`,
+                  toolName: tc.name,
+                  input: parsedInput,
+                  dynamic: true,
+                });
+              }
+            }
+            break;
+
+          case 'response.completed':
+            completedEvent = event;
+            break;
+
+          case 'error':
+            send({
+              type: 'error',
+              errorText: event.error?.message ?? 'Unknown OpenAI error',
+            });
+            return;
+        }
+      }
+    }
+
+    if (!completedEvent) return;
+
+    session.previousResponseId = completedEvent.response.id;
+
+    const usage = completedEvent.response.usage;
+    if (usage) {
+      cumulativeTokens.input += usage.input_tokens ?? 0;
+      cumulativeTokens.inputCached +=
+        usage.input_tokens_details?.cached_tokens ?? 0;
+      cumulativeTokens.output += usage.output_tokens ?? 0;
+    }
+    send({
+      type: 'data-stats',
+      data: { tokens: { ...cumulativeTokens } },
+    });
+
+    const functionCalls = (completedEvent.response.output || []).filter(
+      (o: { type: string }) => o.type === 'function_call',
+    );
+
+    if (functionCalls.length > 0 && stepCount < MAX_STEPS) {
+      stepCount++;
+
+      const toolOutputs: {
+        type: string;
+        call_id: string;
+        output: string;
+      }[] = [];
+
+      for (const fc of functionCalls) {
+        let args: Record<string, string> = {};
+        try {
+          args = JSON.parse(fc.arguments);
+        } catch {
+          // ignore parse errors
+        }
+
+        let result: string;
+        try {
+          console.log(
+            `[http/tool] Executing ${fc.name}:`,
+            JSON.stringify(args).substring(0, 200),
+          );
+          const toolResult = await bashTools[fc.name].execute(args);
+          result =
+            typeof toolResult === 'string'
+              ? toolResult
+              : JSON.stringify(toolResult);
+        } catch (err) {
+          result = `Error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+
+        const truncatedResult =
+          result.length > 10000
+            ? result.substring(0, 10000) + '\n... (truncated)'
+            : result;
+
+        send({
+          type: 'tool-output-available',
+          toolCallId: `tool-${fc.call_id}`,
+          output: truncatedResult,
+          dynamic: true,
+        });
+
+        toolOutputs.push({
+          type: 'function_call_output',
+          call_id: fc.call_id,
+          output: truncatedResult,
+        });
+      }
+
+      send({ type: 'finish-step' });
+      await runStep(toolOutputs, session.previousResponseId);
+    } else {
+      send({ type: 'finish-step' });
+      send({ type: 'finish', finishReason: 'stop' });
+    }
+  }
+
+  try {
+    await runStep(input, session.previousResponseId);
+  } catch (err) {
+    console.error('[http] Error:', err);
+    send({
+      type: 'error',
+      errorText: err instanceof Error ? err.message : 'Internal error',
+    });
+  } finally {
+    if (!res.destroyed) {
+      res.end();
+    }
+  }
+}
+
 app.prepare().then(() => {
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
+    const { pathname } = parse(req.url!, true);
+    if (pathname === '/api/chat' && req.method === 'POST') {
+      try {
+        await handleHttpChat(req, res);
+      } catch (err) {
+        console.error('[http] Unhandled error:', err);
+        if (!res.headersSent) {
+          res.writeHead(500);
+          res.end('Internal server error');
+        }
+      }
+      return;
+    }
     handle(req, res, parse(req.url!, true));
   });
 
@@ -202,6 +548,7 @@ app.prepare().then(() => {
         }
 
         let stepCount = 0;
+        let cumulativeTokens = { input: 0, inputCached: 0, output: 0 };
 
         function send(chunk: Record<string, unknown>) {
           if (clientWs.readyState === WebSocket.OPEN) {
@@ -310,6 +657,15 @@ app.prepare().then(() => {
                 case 'response.completed': {
                   previousResponseId = event.response.id;
                   ws.off('message', onMessage);
+
+                  // Track cumulative token usage
+                  const usage = event.response.usage;
+                  if (usage) {
+                    cumulativeTokens.input += usage.input_tokens ?? 0;
+                    cumulativeTokens.inputCached += usage.input_tokens_details?.cached_tokens ?? 0;
+                    cumulativeTokens.output += usage.output_tokens ?? 0;
+                  }
+                  send({ type: 'data-stats', data: { tokens: { ...cumulativeTokens } } });
 
                   // Check if there are function calls to handle
                   const functionCalls = (event.response.output || []).filter(
