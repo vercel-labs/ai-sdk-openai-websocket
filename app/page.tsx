@@ -242,21 +242,29 @@ function LatencyComparison({
   httpStats: ResponseStats;
 }) {
   const maxSteps = Math.max(
-    wsStats.stepLatencies.length,
-    httpStats.stepLatencies.length,
+    wsStats.stepTtfbs.length,
+    httpStats.stepTtfbs.length,
   );
-  const wsTotal = wsStats.endTime! - wsStats.startTime;
-  const httpTotal = httpStats.endTime! - httpStats.startTime;
-  const totalDiff = httpTotal - wsTotal;
+
+  const wsTtfbSum =
+    wsStats.stepTtfbs.length > 0
+      ? wsStats.stepTtfbs.reduce((a, b) => a + b, 0)
+      : null;
+  const httpTtfbSum =
+    httpStats.stepTtfbs.length > 0
+      ? httpStats.stepTtfbs.reduce((a, b) => a + b, 0)
+      : null;
+  const totalDiff =
+    wsTtfbSum != null && httpTtfbSum != null ? httpTtfbSum - wsTtfbSum : null;
 
   const wsAvg =
-    wsStats.stepLatencies.length > 0 ? mean(wsStats.stepLatencies) : null;
+    wsStats.stepTtfbs.length > 0 ? mean(wsStats.stepTtfbs) : null;
   const httpAvg =
-    httpStats.stepLatencies.length > 0 ? mean(httpStats.stepLatencies) : null;
+    httpStats.stepTtfbs.length > 0 ? mean(httpStats.stepTtfbs) : null;
   const wsMedian =
-    wsStats.stepLatencies.length > 0 ? median(wsStats.stepLatencies) : null;
+    wsStats.stepTtfbs.length > 0 ? median(wsStats.stepTtfbs) : null;
   const httpMedian =
-    httpStats.stepLatencies.length > 0 ? median(httpStats.stepLatencies) : null;
+    httpStats.stepTtfbs.length > 0 ? median(httpStats.stepTtfbs) : null;
 
   const avgDiff =
     wsAvg != null && httpAvg != null ? httpAvg - wsAvg : null;
@@ -265,6 +273,7 @@ function LatencyComparison({
 
   return (
     <div className="latency-comparison">
+      <div className="latency-comparison-title">TTFB (Time to First Byte)</div>
       <table>
         <thead>
           <tr>
@@ -276,8 +285,8 @@ function LatencyComparison({
         </thead>
         <tbody>
           {Array.from({ length: maxSteps }, (_, i) => {
-            const ws = wsStats.stepLatencies[i];
-            const http = httpStats.stepLatencies[i];
+            const ws = wsStats.stepTtfbs[i];
+            const http = httpStats.stepTtfbs[i];
             const diff = ws != null && http != null ? http - ws : null;
             const wsRespId = wsStats.stepResponseIds[i];
             const httpRespId = httpStats.stepResponseIds[i];
@@ -294,17 +303,15 @@ function LatencyComparison({
                     </div>
                   )}
                 </td>
-                <td>{ws != null ? `${(ws / 1000).toFixed(1)}s` : '—'}</td>
-                <td>
-                  {http != null ? `${(http / 1000).toFixed(1)}s` : '—'}
-                </td>
+                <td>{ws != null ? `${(ws / 1000).toFixed(3)}s` : '—'}</td>
+                <td>{http != null ? `${(http / 1000).toFixed(3)}s` : '—'}</td>
                 <td
                   className={
                     diff != null ? (diff > 0 ? 'slower' : 'faster') : ''
                   }
                 >
                   {diff != null
-                    ? `${diff > 0 ? '+' : ''}${(diff / 1000).toFixed(1)}s`
+                    ? `${diff > 0 ? '+' : ''}${(diff / 1000).toFixed(3)}s`
                     : '—'}
                 </td>
               </tr>
@@ -312,11 +319,26 @@ function LatencyComparison({
           })}
           <tr className="total-row">
             <td>Total</td>
-            <td>{(wsTotal / 1000).toFixed(1)}s</td>
-            <td>{(httpTotal / 1000).toFixed(1)}s</td>
-            <td className={totalDiff > 0 ? 'slower' : 'faster'}>
-              {totalDiff > 0 ? '+' : ''}
-              {(totalDiff / 1000).toFixed(1)}s
+            <td>
+              {wsTtfbSum != null ? `${(wsTtfbSum / 1000).toFixed(3)}s` : '—'}
+            </td>
+            <td>
+              {httpTtfbSum != null
+                ? `${(httpTtfbSum / 1000).toFixed(3)}s`
+                : '—'}
+            </td>
+            <td
+              className={
+                totalDiff != null
+                  ? totalDiff > 0
+                    ? 'slower'
+                    : 'faster'
+                  : ''
+              }
+            >
+              {totalDiff != null
+                ? `${totalDiff > 0 ? '+' : ''}${(totalDiff / 1000).toFixed(3)}s`
+                : '—'}
             </td>
           </tr>
           <tr className="summary-row">

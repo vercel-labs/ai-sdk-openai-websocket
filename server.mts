@@ -208,6 +208,7 @@ async function handleHttpChat(req: IncomingMessage, res: ServerResponse) {
     }
 
     console.log('[http] Sending request to OpenAI');
+    const requestSentAt = Date.now();
     const apiResponse = await fetch(OPENAI_API_URL, {
       method: 'POST',
       headers: {
@@ -264,7 +265,8 @@ async function handleHttpChat(req: IncomingMessage, res: ServerResponse) {
         }
 
         switch (event.type) {
-          case 'response.created':
+          case 'response.created': {
+            const ttfb = Date.now() - requestSentAt;
             if (isFirstResponse) {
               send({
                 type: 'start',
@@ -272,8 +274,9 @@ async function handleHttpChat(req: IncomingMessage, res: ServerResponse) {
               });
               isFirstResponse = false;
             }
-            send({ type: 'start-step', responseId: event.response.id });
+            send({ type: 'start-step', responseId: event.response.id, ttfb });
             break;
+          }
 
           case 'response.output_text.delta':
             if (isFirstDelta) {
@@ -561,6 +564,7 @@ app.prepare().then(() => {
           input: unknown[],
           prevResponseId: string | null,
           isFirstResponse: boolean,
+          requestSentAt: number,
         ) {
           let pendingToolCalls: PendingToolCall[] = [];
           let textPartId = '';
@@ -572,15 +576,17 @@ app.prepare().then(() => {
               console.log(`[openai] Event: ${event.type}`);
 
               switch (event.type) {
-                case 'response.created':
+                case 'response.created': {
+                  const ttfb = Date.now() - requestSentAt;
                   if (isFirstResponse) {
                     send({
                       type: 'start',
                       messageId: `msg-${event.response.id}`,
                     });
                   }
-                  send({ type: 'start-step', responseId: event.response.id });
+                  send({ type: 'start-step', responseId: event.response.id, ttfb });
                   break;
+                }
 
                 case 'response.output_text.delta':
                   if (isFirstDelta) {
@@ -729,13 +735,6 @@ app.prepare().then(() => {
                       send({ type: 'finish-step' });
 
                       // Continue the conversation with tool results
-                      handleOpenAIResponse(
-                        ws,
-                        toolOutputs,
-                        previousResponseId,
-                        false,
-                      );
-
                       const continueBody: Record<string, unknown> = {
                         type: 'response.create',
                         model: MODEL,
@@ -747,6 +746,15 @@ app.prepare().then(() => {
                         continueBody.previous_response_id =
                           previousResponseId;
                       }
+
+                      const nextRequestSentAt = Date.now();
+                      handleOpenAIResponse(
+                        ws,
+                        toolOutputs,
+                        previousResponseId,
+                        false,
+                        nextRequestSentAt,
+                      );
                       ws.send(JSON.stringify(continueBody));
                     })();
                   } else {
@@ -774,9 +782,6 @@ app.prepare().then(() => {
           ws.on('message', onMessage);
         }
 
-        // Set up the handler for this response
-        handleOpenAIResponse(ws, input, previousResponseId, true);
-
         // Send the initial request
         const body: Record<string, unknown> = {
           type: 'response.create',
@@ -790,6 +795,8 @@ app.prepare().then(() => {
         }
 
         console.log('[ws] Sending request to OpenAI');
+        const initialRequestSentAt = Date.now();
+        handleOpenAIResponse(ws, input, previousResponseId, true, initialRequestSentAt);
         ws.send(JSON.stringify(body));
       } catch (err) {
         console.error('[ws] Error in message handler:', err);
