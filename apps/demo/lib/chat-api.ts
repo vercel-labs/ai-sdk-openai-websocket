@@ -7,7 +7,7 @@ import { loadDocsFromDisk } from './load-docs';
 export const MODEL_ID = 'gpt-4.1-mini';
 export const MAX_STEPS = 30;
 
-export const SYSTEM_PROMPT = `You are an AI SDK documentation assistant. You have access to the Vercel AI SDK documentation in /workspace/docs/. Use your tools to explore the docs, answer questions, and create or modify documentation files.
+export const SYSTEM_PROMPT = `You are an AI SDK documentation assistant. You have access to the AI SDK documentation in /workspace/docs/. Use your tools to explore the docs, answer questions, and create or modify documentation files.
 
 Always start by exploring the available files to understand the structure before answering. Use bash commands like ls, find, and grep to explore, then read specific files for details.
 

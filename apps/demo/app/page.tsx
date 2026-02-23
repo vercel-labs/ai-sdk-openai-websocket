@@ -490,9 +490,6 @@ function groupByRole(
 }
 
 const DEFAULT_PROMPT =
-  'What are all the different ways to handle streaming in the AI SDK? Find every doc that mentions streaming, summarize the different approaches, and show example code for each.';
-
-const SECOND_PROMPT =
   'Create a new doc file at /workspace/docs/provider-comparison.mdx that compares every AI provider supported by the SDK. For each provider, include: supported models, configuration options, and a basic usage example. Base everything on what\'s already in the docs.';
 
 type DiffLine = { text: string; type: 'add' | 'remove' | 'context' };
@@ -541,8 +538,9 @@ function Sidebar({ open, onClose, animate }: { open: boolean; onClose: () => voi
           <section>
             <h3>The agent</h3>
             <p>
-              The AI agent has access to a <strong>virtual file system</strong> pre-loaded with all of the
-              Vercel AI SDK documentation as markdown files. It can read, search, and write files using
+              The AI agent has access to a <strong>virtual file system</strong> pre-loaded with all of the{' '}
+              <a href="https://ai-sdk.dev/" target="_blank" rel="noopener noreferrer">AI SDK</a> documentation
+              as markdown files. It can read, search, and write files using
               bash-like tools (<code>bash</code>, <code>readFile</code>, <code>writeFile</code>).
             </p>
           </section>
@@ -613,12 +611,11 @@ function Sidebar({ open, onClose, animate }: { open: boolean; onClose: () => voi
           </section>
 
           <section>
-            <h3>Demo prompts</h3>
+            <h3>Demo prompt</h3>
             <p>
-              The input is pre-filled with a prompt designed to trigger ~10 tool calls (searching and
-              reading docs about streaming). After submitting, a second prompt is loaded that triggers
-              ~20 tool calls (creating a provider comparison doc), so you can compare performance
-              across different workload sizes.
+              The input is pre-filled with a prompt that asks the agent to create a provider comparison
+              doc. This triggers ~20 tool calls (reading and writing docs), giving a clear picture of
+              how HTTP and WebSocket performance compare in agentic workflows.
             </p>
           </section>
         </div>
@@ -645,7 +642,7 @@ export default function Chat() {
     Record<string, ResponseStats>
   >({});
   const [inputValue, setInputValue] = useState(DEFAULT_PROMPT);
-  const [hasSubmitted, setHasSubmitted] = useState(false);
+
   const [expandedTurns, setExpandedTurns] = useState<Set<number>>(new Set());
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const sidebarAnimateRef = useRef(false);
@@ -721,13 +718,7 @@ export default function Chat() {
     if (inputValue.trim()) {
       wsChat.sendMessage({ text: inputValue });
       httpChat.sendMessage({ text: inputValue });
-
-      if (!hasSubmitted) {
-        setHasSubmitted(true);
-        setInputValue(SECOND_PROMPT);
-      } else {
-        setInputValue('');
-      }
+      setInputValue('');
     }
   }
 
