@@ -1,6 +1,6 @@
 {
   "name": "ai-sdk-openai-websocket-fetch",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "WebSocket transport for the AI SDK OpenAI provider — drop-in fetch replacement that routes streaming requests through a persistent WebSocket connection.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -18,7 +18,10 @@
       }
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit"
