@@ -166,15 +166,11 @@ function ToolSummary({
   stats,
   hasText,
   isStreaming,
-  expanded,
-  onToggle,
 }: {
   parts: ToolPart[];
   stats?: ResponseStats;
   hasText: boolean;
   isStreaming: boolean;
-  expanded: boolean;
-  onToggle: () => void;
 }) {
   const activePart = [...parts].reverse().find(
     p => p.state === 'input-streaming' || p.state === 'input-available',
@@ -203,9 +199,6 @@ function ToolSummary({
     <div className="tool-summary">
       <span className={`tool-call-indicator ${indicatorClass}`} />
       <span className="tool-summary-label">{label}</span>
-      <button className="summary-toggle-btn" onClick={onToggle}>
-        {expanded ? 'Hide' : 'Show'}
-      </button>
     </div>
   );
 }
@@ -214,12 +207,10 @@ function AssistantMessage({
   message,
   stats,
   expanded,
-  onToggle,
 }: {
   message: UIMessage;
   stats?: ResponseStats;
   expanded: boolean;
-  onToggle: () => void;
 }) {
   const isStreaming = !stats?.endTime;
   const toolParts = message.parts.filter(
@@ -236,8 +227,6 @@ function AssistantMessage({
           stats={stats}
           hasText={hasText}
           isStreaming={isStreaming}
-          expanded={expanded}
-          onToggle={onToggle}
         />
       )}
       {expanded &&
@@ -702,7 +691,6 @@ export default function Chat() {
   }, [wsChat.messages, httpChat.messages]);
 
   const isReady = wsChat.status === 'ready' && httpChat.status === 'ready';
-  const isBusy = !isReady;
 
   function toggleTurnExpanded(turnIndex: number) {
     setExpandedTurns(prev => {
@@ -720,11 +708,6 @@ export default function Chat() {
       httpChat.sendMessage({ text: inputValue });
       setInputValue('');
     }
-  }
-
-  function handleStop() {
-    wsChat.stop();
-    httpChat.stop();
   }
 
   const turns = buildTurns(httpChat.messages, wsChat.messages);
@@ -763,6 +746,11 @@ export default function Chat() {
                   {turn.user.parts.map((p, j) =>
                     p.type === 'text' ? <span key={j}>{p.text}</span> : null,
                   )}
+                  {(turn.httpAssistant || turn.wsAssistant) && (
+                    <button className="details-toggle-btn" onClick={toggle}>
+                      {expanded ? 'Hide details' : 'Show details'}
+                    </button>
+                  )}
                 </div>
               )}
               {(turn.httpAssistant || turn.wsAssistant) && (
@@ -773,7 +761,6 @@ export default function Chat() {
                         message={turn.httpAssistant}
                         stats={httpStats}
                         expanded={expanded}
-                        onToggle={toggle}
                       />
                     )}
                   </div>
@@ -783,7 +770,6 @@ export default function Chat() {
                         message={turn.wsAssistant}
                         stats={wsStats}
                         expanded={expanded}
-                        onToggle={toggle}
                       />
                     )}
                   </div>
@@ -798,16 +784,6 @@ export default function Chat() {
       </div>
 
       <div className="input-bar">
-        {isBusy && (
-          <div className="status">
-            {(wsChat.status === 'submitted' ||
-              httpChat.status === 'submitted') && <span>Thinking...</span>}
-            <button className="stop-button" onClick={handleStop}>
-              Stop
-            </button>
-          </div>
-        )}
-
         {(wsChat.error || httpChat.error) && (
           <div className="error">
             Error: {wsChat.error?.message || httpChat.error?.message}
