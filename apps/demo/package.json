@@ -1,0 +1,35 @@
+{
+  "name": "demo",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.30",
+    "@ai-sdk/react": "^3",
+    "@streamdown/code": "^1.0.3",
+    "@tailwindcss/postcss": "^4.2.0",
+    "ai": "^6",
+    "ai-sdk-openai-websocket-fetch": "workspace:*",
+    "bash-tool": "latest",
+    "just-bash": "^2.10.2",
+    "memfs": "^4.56.10",
+    "next": "^15",
+    "react": "^18",
+    "react-dom": "^18",
+    "streamdown": "^2.3.0",
+    "tailwindcss": "^4.2.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}

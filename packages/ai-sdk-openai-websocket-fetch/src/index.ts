@@ -22,7 +22,7 @@ export interface CreateWebSocketFetchOptions {
  * @example
  * ```ts
  * import { createOpenAI } from '@ai-sdk/openai';
- * import { createWebSocketFetch } from './openai-websocket-fetch';
+ * import { createWebSocketFetch } from 'ai-sdk-openai-websocket-fetch';
  *
  * const wsFetch = createWebSocketFetch();
  * const openai = createOpenAI({ fetch: wsFetch });

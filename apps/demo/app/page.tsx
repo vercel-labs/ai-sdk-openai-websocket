@@ -568,7 +568,7 @@ function Sidebar({ open, onClose, animate }: { open: boolean; onClose: () => voi
             <h3>Implementation</h3>
             <p>
               The standard HTTP route is in <a
-                href="https://github.com/vercel-labs/ai-sdk-openai-websocket-demo/blob/main/app/api/chat/route.ts"
+                href="https://github.com/vercel-labs/ai-sdk-openai-websocket/blob/main/apps/demo/app/api/chat/route.ts"
                 target="_blank"
                 rel="noopener noreferrer"
               >app/api/chat/route.ts</a>.
@@ -624,7 +624,7 @@ function Sidebar({ open, onClose, animate }: { open: boolean; onClose: () => voi
         </div>
         <div className="sidebar-footer">
           <a
-            href="https://github.com/vercel-labs/ai-sdk-openai-websocket-demo"
+            href="https://github.com/vercel-labs/ai-sdk-openai-websocket"
             target="_blank"
             rel="noopener noreferrer"
           >View on GitHub</a>

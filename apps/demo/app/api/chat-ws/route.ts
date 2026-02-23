@@ -5,7 +5,7 @@ import {
   stepCountIs,
 } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
-import { createWebSocketFetch } from '@/lib/openai-websocket-fetch';
+import { createWebSocketFetch } from 'ai-sdk-openai-websocket-fetch';
 import {
   MODEL_ID,
   MAX_STEPS,

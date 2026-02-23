@@ -1,33 +1,15 @@
 {
-  "name": "ai-sdk-openai-websocket-demo",
-  "version": "0.0.0",
+  "name": "ai-sdk-openai-websocket",
   "private": true,
+  "packageManager": "pnpm@10.11.0",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
-  },
-  "dependencies": {
-    "@ai-sdk/openai": "^3.0.30",
-    "@ai-sdk/react": "^3",
-    "@streamdown/code": "^1.0.3",
-    "@tailwindcss/postcss": "^4.2.0",
-    "ai": "^6",
-    "bash-tool": "latest",
-    "next": "^15",
-    "react": "^18",
-    "react-dom": "^18",
-    "streamdown": "^2.3.0",
-    "tailwindcss": "^4.2.0",
-    "ws": "^8",
-    "zod": "^4.3.6"
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
-    "@types/node": "^20",
-    "@types/react": "^18",
-    "@types/react-dom": "^18",
-    "@types/ws": "^8",
-    "tsx": "^4",
-    "typescript": "^5"
+    "@changesets/cli": "^2",
+    "playwright": "^1.58.2",
+    "turbo": "^2"
   }
 }
