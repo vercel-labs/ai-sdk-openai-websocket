@@ -62,24 +62,30 @@ export class HttpChatTransport implements ChatTransport<UIMessage> {
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
 
-            for (const line of lines) {
-              if (!line.trim()) continue;
+            let eventEnd;
+            while ((eventEnd = buffer.indexOf('\n\n')) !== -1) {
+              const eventText = buffer.slice(0, eventEnd);
+              buffer = buffer.slice(eventEnd + 2);
 
-              const chunk = JSON.parse(line);
+              const dataLine = eventText
+                .split('\n')
+                .find(l => l.startsWith('data: '));
+              if (!dataLine) continue;
 
-              // Handle data-stats — swallow, don't enqueue
-              if (chunk.type === 'data-stats') {
-                if (stats && chunk.data?.tokens) {
-                  stats.tokens = chunk.data.tokens;
-                  notifyStats();
-                }
+              const data = dataLine.slice(6);
+              if (data === '[DONE]') {
+                controller.close();
+                return;
+              }
+
+              let chunk: UIMessageChunk;
+              try {
+                chunk = JSON.parse(data);
+              } catch {
                 continue;
               }
 
-              // Track stats from standard chunk types
               switch (chunk.type) {
                 case 'start':
                   stats = {
@@ -101,12 +107,6 @@ export class HttpChatTransport implements ChatTransport<UIMessage> {
                   if (stats) {
                     stats.steps++;
                     stats.currentStepStartTime = Date.now();
-                    if (chunk.responseId) {
-                      stats.stepResponseIds.push(chunk.responseId);
-                    }
-                    if (typeof chunk.ttfb === 'number') {
-                      stats.stepTtfbs.push(chunk.ttfb);
-                    }
                     notifyStats();
                   }
                   break;
@@ -134,7 +134,7 @@ export class HttpChatTransport implements ChatTransport<UIMessage> {
                   break;
               }
 
-              controller.enqueue(chunk as UIMessageChunk);
+              controller.enqueue(chunk);
 
               if (chunk.type === 'finish' || chunk.type === 'error') {
                 controller.close();
