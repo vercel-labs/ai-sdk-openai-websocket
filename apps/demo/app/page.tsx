@@ -490,7 +490,7 @@ function groupByRole(
 }
 
 const DEFAULT_PROMPT =
-  'Create a new doc file at /workspace/docs/provider-comparison.mdx that compares every AI provider supported by the SDK. For each provider, include: supported models, configuration options, and a basic usage example. Base everything on what\'s already in the docs.';
+  'Read through all documentation files. Then create a new doc file at /workspace/docs/provider-comparison.mdx that compares every AI provider supported by the SDK. For each provider, include: supported models, configuration options, and a basic usage example.';
 
 type DiffLine = { text: string; type: 'add' | 'remove' | 'context' };
 
