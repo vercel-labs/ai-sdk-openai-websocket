@@ -28,6 +28,8 @@ export class HttpChatTransport implements ChatTransport<UIMessage> {
   }: Parameters<ChatTransport<UIMessage>['sendMessages']>[0]): Promise<
     ReadableStream<UIMessageChunk>
   > {
+    const requestSentAt = Date.now();
+
     const response = await fetch(this.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -43,6 +45,7 @@ export class HttpChatTransport implements ChatTransport<UIMessage> {
       async start(controller) {
         let stats: ResponseStats | null = null;
         let buffer = '';
+        let lastFinishStepAt: number | null = null;
 
         function notifyStats() {
           if (transport.onStatsUpdate && stats) {
@@ -87,7 +90,13 @@ export class HttpChatTransport implements ChatTransport<UIMessage> {
               }
 
               switch (chunk.type) {
-                case 'start':
+                case 'start': {
+                  const messageId =
+                    chunk.messageId ||
+                    `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+                  if (!chunk.messageId) {
+                    chunk = { ...chunk, messageId };
+                  }
                   stats = {
                     startTime: Date.now(),
                     steps: 0,
@@ -99,14 +108,18 @@ export class HttpChatTransport implements ChatTransport<UIMessage> {
                     endTime: null,
                     tokens: null,
                     toolCallSteps: {},
-                    messageId: chunk.messageId ?? '',
+                    messageId,
                   };
                   notifyStats();
                   break;
+                }
                 case 'start-step':
                   if (stats) {
                     stats.steps++;
                     stats.currentStepStartTime = Date.now();
+                    stats.stepTtfbs.push(
+                      Date.now() - (lastFinishStepAt ?? requestSentAt),
+                    );
                     notifyStats();
                   }
                   break;
@@ -123,6 +136,7 @@ export class HttpChatTransport implements ChatTransport<UIMessage> {
                       Date.now() - stats.currentStepStartTime,
                     );
                     stats.currentStepStartTime = null;
+                    lastFinishStepAt = Date.now();
                     notifyStats();
                   }
                   break;
