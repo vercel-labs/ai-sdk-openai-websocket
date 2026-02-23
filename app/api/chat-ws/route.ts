@@ -4,7 +4,8 @@ import {
   convertToModelMessages,
   stepCountIs,
 } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createWebSocketFetch } from '@/lib/openai-websocket-fetch';
 import {
   MODEL_ID,
   MAX_STEPS,
@@ -19,6 +20,8 @@ export async function POST(req: Request) {
 
   console.log(`[ws] Request with ${messages.length} messages`);
 
+  const wsFetch = createWebSocketFetch();
+  const openai = createOpenAI({ fetch: wsFetch });
   const tools = await createTools();
 
   const result = streamText({
@@ -27,6 +30,7 @@ export async function POST(req: Request) {
     messages: await convertToModelMessages(messages),
     tools,
     stopWhen: stepCountIs(MAX_STEPS),
+    onFinish: () => wsFetch.close(),
   });
 
   return result.toUIMessageStreamResponse();
