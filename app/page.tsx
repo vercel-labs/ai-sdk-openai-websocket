@@ -311,6 +311,8 @@ function LatencyComparison({
   httpStats: ResponseStats;
   wsStats: ResponseStats;
 }) {
+  const [showExplanation, setShowExplanation] = useState(false);
+
   const minSteps = Math.min(
     httpStats.stepTtfbs.length,
     wsStats.stepTtfbs.length,
@@ -332,6 +334,16 @@ function LatencyComparison({
 
   const avgDiff = wsAvg - httpAvg;
   const medianDiff = wsMedian - httpMedian;
+
+  const hasExcludedSteps = minSteps > 1;
+  const exHttp = pairedHttp.slice(1);
+  const exWs = pairedWs.slice(1);
+  const exHttpAvg = hasExcludedSteps ? mean(exHttp) : 0;
+  const exWsAvg = hasExcludedSteps ? mean(exWs) : 0;
+  const exHttpMedian = hasExcludedSteps ? median(exHttp) : 0;
+  const exWsMedian = hasExcludedSteps ? median(exWs) : 0;
+  const exAvgDiff = exWsAvg - exHttpAvg;
+  const exMedianDiff = exWsMedian - exHttpMedian;
 
   return (
     <div className="latency-comparison">
@@ -384,6 +396,46 @@ function LatencyComparison({
               {formatDiff(medianDiff, httpMedian)}
             </td>
           </tr>
+          {hasExcludedSteps && (
+            <>
+              <tr className="excluding-header-row">
+                <td colSpan={4}>
+                  <span>Excluding step 1</span>
+                  <button
+                    className="explain-toggle"
+                    onClick={() => setShowExplanation(v => !v)}
+                    aria-label="Why exclude step 1?"
+                    title="Why exclude step 1?"
+                  >?</button>
+                </td>
+              </tr>
+              {showExplanation && (
+                <tr className="explanation-row">
+                  <td colSpan={4}>
+                    Step 1 includes the WebSocket handshake (DNS + TCP + TLS + upgrade),
+                    making it slower than HTTP. Excluding it shows the steady-state
+                    advantage of reusing an open connection.
+                  </td>
+                </tr>
+              )}
+              <tr className="summary-row">
+                <td>Avg</td>
+                <td>{(exHttpAvg / 1000).toFixed(3)}s</td>
+                <td>{(exWsAvg / 1000).toFixed(3)}s</td>
+                <td className={exAvgDiff > 0 ? 'slower' : 'faster'}>
+                  {formatDiff(exAvgDiff, exHttpAvg)}
+                </td>
+              </tr>
+              <tr className="summary-row">
+                <td>Median</td>
+                <td>{(exHttpMedian / 1000).toFixed(3)}s</td>
+                <td>{(exWsMedian / 1000).toFixed(3)}s</td>
+                <td className={exMedianDiff > 0 ? 'slower' : 'faster'}>
+                  {formatDiff(exMedianDiff, exHttpMedian)}
+                </td>
+              </tr>
+            </>
+          )}
         </tbody>
       </table>
     </div>
@@ -466,12 +518,12 @@ function DiffBlock({ lines }: { lines: DiffLine[] }) {
   );
 }
 
-function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+function Sidebar({ open, onClose, animate }: { open: boolean; onClose: () => void; animate: boolean }) {
   if (!open) return null;
 
   return (
-    <div className="sidebar-overlay" onClick={onClose}>
-      <aside className="sidebar" onClick={e => e.stopPropagation()}>
+    <div className={`sidebar-overlay${animate ? '' : ' no-animate'}`} onClick={onClose}>
+      <aside className={`sidebar${animate ? '' : ' no-animate'}`} onClick={e => e.stopPropagation()}>
         <div className="sidebar-header">
           <h2>About this demo</h2>
           <button className="sidebar-close" onClick={onClose} aria-label="Close">&times;</button>
@@ -595,10 +647,20 @@ export default function Chat() {
   const [inputValue, setInputValue] = useState(DEFAULT_PROMPT);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [expandedTurns, setExpandedTurns] = useState<Set<number>>(new Set());
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarAnimateRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
+
+  useEffect(() => {
+    if (localStorage.getItem('sidebar-closed') !== '1') {
+      setSidebarOpen(true);
+    }
+    requestAnimationFrame(() => {
+      sidebarAnimateRef.current = true;
+    });
+  }, []);
 
   useEffect(() => {
     wsTransport.onStatsUpdate = (messageId, stats) => {
@@ -678,7 +740,10 @@ export default function Chat() {
 
   return (
     <div className="chat-container">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar open={sidebarOpen} animate={sidebarAnimateRef.current} onClose={() => {
+        setSidebarOpen(false);
+        localStorage.setItem('sidebar-closed', '1');
+      }} />
       <div className="chat-scroll-area" ref={scrollRef}>
         <div className="column-labels">
           <button
