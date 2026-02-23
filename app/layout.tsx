@@ -1,4 +1,5 @@
 import './globals.css';
+import 'streamdown/styles.css';
 
 export const metadata = {
   title: 'Next.js + AI SDK + OpenAI WebSocket Transport',

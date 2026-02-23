@@ -5,7 +5,9 @@ import {
   HttpChatTransport,
   type ResponseStats,
 } from '@/lib/http-chat-transport';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Streamdown } from 'streamdown';
+import { code } from '@streamdown/code';
 
 const wsTransport = new HttpChatTransport({ endpoint: '/api/chat-ws' });
 const httpTransport = new HttpChatTransport({ endpoint: '/api/chat' });
@@ -148,69 +150,134 @@ function ResponseStatsBar({ stats }: { stats: ResponseStats }) {
   return <div className="response-stats">Tokens: {tokenStr}</div>;
 }
 
-function MessageList({
-  messages,
-  statsMap,
-}: {
-  messages: UIMessage[];
-  statsMap: Record<string, ResponseStats>;
-}) {
-  return (
-    <div className="messages">
-      {messages.map(m => {
-        const stats = m.role === 'assistant' ? statsMap[m.id] : undefined;
-        return (
-          <div key={m.id} className={`message ${m.role}`}>
-            {m.parts.map((part, i) => {
-              const elements: React.ReactNode[] = [];
+const streamdownPlugins = { code };
 
-              if (part.type === 'text') {
-                elements.push(<span key={i}>{part.text}</span>);
-                if (stats) {
-                  const textStepIndex = stats.steps - 1;
-                  const hasToolCalls =
-                    Object.keys(stats.toolCallSteps).length > 0;
-                  if (hasToolCalls || stats.steps > 1) {
-                    elements.push(
-                      <StepLatency
-                        key={`step-${textStepIndex}`}
-                        stats={stats}
-                        stepIndex={textStepIndex}
-                      />,
-                    );
-                  }
-                }
-              } else if (part.type === 'dynamic-tool') {
-                elements.push(<ToolCall key={i} part={part} />);
-                if (stats) {
-                  const myStep = stats.toolCallSteps[part.toolCallId];
-                  if (myStep !== undefined) {
-                    const nextPart = m.parts[i + 1];
-                    const nextStep =
-                      nextPart?.type === 'dynamic-tool'
-                        ? stats.toolCallSteps[
-                            (nextPart as { toolCallId: string }).toolCallId
-                          ]
-                        : undefined;
-                    if (myStep !== nextStep) {
-                      elements.push(
-                        <StepLatency
-                          key={`step-${myStep}`}
-                          stats={stats}
-                          stepIndex={myStep}
-                        />,
-                      );
-                    }
-                  }
+type ToolPart = {
+  type: 'dynamic-tool';
+  toolName: string;
+  toolCallId: string;
+  state: string;
+  input?: unknown;
+  output?: unknown;
+};
+
+function ToolSummary({
+  parts,
+  stats,
+  hasText,
+  isStreaming,
+  expanded,
+  onToggle,
+}: {
+  parts: ToolPart[];
+  stats?: ResponseStats;
+  hasText: boolean;
+  isStreaming: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const activePart = [...parts].reverse().find(
+    p => p.state === 'input-streaming' || p.state === 'input-available',
+  );
+  const doneCount = parts.filter(p => p.state === 'output-available').length;
+
+  let label: string;
+  if (hasText && isStreaming) {
+    label = 'Rendering output';
+  } else if (activePart) {
+    const verb = activePart.state === 'input-streaming' ? 'calling' : 'running';
+    label = `${verb} ${activePart.toolName}`;
+    if (doneCount > 0) label += ` (${doneCount}/${parts.length} done)`;
+  } else {
+    label = `${doneCount} tool call${doneCount !== 1 ? 's' : ''} completed`;
+  }
+
+  const indicatorClass =
+    hasText && isStreaming
+      ? 'streaming'
+      : activePart && !hasText
+        ? 'executing'
+        : 'done';
+
+  return (
+    <div className="tool-summary">
+      <span className={`tool-call-indicator ${indicatorClass}`} />
+      <span className="tool-summary-label">{label}</span>
+      <button className="summary-toggle-btn" onClick={onToggle}>
+        {expanded ? 'Hide' : 'Show'}
+      </button>
+    </div>
+  );
+}
+
+function AssistantMessage({
+  message,
+  stats,
+  expanded,
+  onToggle,
+}: {
+  message: UIMessage;
+  stats?: ResponseStats;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const isStreaming = !stats?.endTime;
+  const toolParts = message.parts.filter(
+    p => p.type === 'dynamic-tool',
+  ) as unknown as ToolPart[];
+  const hasTools = toolParts.length > 0;
+  const hasText = message.parts.some(p => p.type === 'text' && p.text.length > 0);
+
+  return (
+    <div className="message assistant">
+      {hasTools && (
+        <ToolSummary
+          parts={toolParts}
+          stats={stats}
+          hasText={hasText}
+          isStreaming={isStreaming}
+          expanded={expanded}
+          onToggle={onToggle}
+        />
+      )}
+      {expanded &&
+        message.parts.map((part, i) => {
+          if (part.type === 'dynamic-tool') {
+            const elements: React.ReactNode[] = [];
+            elements.push(<ToolCall key={i} part={part} />);
+            if (stats) {
+              const myStep = stats.toolCallSteps[part.toolCallId];
+              if (myStep !== undefined) {
+                const nextPart = message.parts[i + 1];
+                const nextStep =
+                  nextPart?.type === 'dynamic-tool'
+                    ? stats.toolCallSteps[
+                        (nextPart as { toolCallId: string }).toolCallId
+                      ]
+                    : undefined;
+                if (myStep !== nextStep) {
+                  elements.push(
+                    <StepLatency
+                      key={`step-${myStep}`}
+                      stats={stats}
+                      stepIndex={myStep}
+                    />,
+                  );
                 }
               }
-
-              return elements;
-            })}
-            {stats && <ResponseStatsBar stats={stats} />}
-          </div>
-        );
-      })}
+            }
+            return elements;
+          }
+          if (part.type === 'text') {
+            return (
+              <Streamdown key={i} plugins={streamdownPlugins} animated={isStreaming}>
+                {part.text}
+              </Streamdown>
+            );
+          }
+          return null;
+        })}
+      {stats && <ResponseStatsBar stats={stats} />}
     </div>
   );
 }
@@ -244,35 +311,27 @@ function LatencyComparison({
   httpStats: ResponseStats;
   wsStats: ResponseStats;
 }) {
-  const maxSteps = Math.max(
+  const minSteps = Math.min(
     httpStats.stepTtfbs.length,
     wsStats.stepTtfbs.length,
   );
 
-  const httpTtfbSum =
-    httpStats.stepTtfbs.length > 0
-      ? httpStats.stepTtfbs.reduce((a, b) => a + b, 0)
-      : null;
-  const wsTtfbSum =
-    wsStats.stepTtfbs.length > 0
-      ? wsStats.stepTtfbs.reduce((a, b) => a + b, 0)
-      : null;
-  const totalDiff =
-    httpTtfbSum != null && wsTtfbSum != null ? wsTtfbSum - httpTtfbSum : null;
+  const pairedHttp = httpStats.stepTtfbs.slice(0, minSteps);
+  const pairedWs = wsStats.stepTtfbs.slice(0, minSteps);
 
-  const httpAvg =
-    httpStats.stepTtfbs.length > 0 ? mean(httpStats.stepTtfbs) : null;
-  const wsAvg =
-    wsStats.stepTtfbs.length > 0 ? mean(wsStats.stepTtfbs) : null;
-  const httpMedian =
-    httpStats.stepTtfbs.length > 0 ? median(httpStats.stepTtfbs) : null;
-  const wsMedian =
-    wsStats.stepTtfbs.length > 0 ? median(wsStats.stepTtfbs) : null;
+  if (minSteps === 0) return null;
 
-  const avgDiff =
-    httpAvg != null && wsAvg != null ? wsAvg - httpAvg : null;
-  const medianDiff =
-    httpMedian != null && wsMedian != null ? wsMedian - httpMedian : null;
+  const httpTtfbSum = pairedHttp.reduce((a, b) => a + b, 0);
+  const wsTtfbSum = pairedWs.reduce((a, b) => a + b, 0);
+  const totalDiff = wsTtfbSum - httpTtfbSum;
+
+  const httpAvg = mean(pairedHttp);
+  const wsAvg = mean(pairedWs);
+  const httpMedian = median(pairedHttp);
+  const wsMedian = median(pairedWs);
+
+  const avgDiff = wsAvg - httpAvg;
+  const medianDiff = wsMedian - httpMedian;
 
   return (
     <div className="latency-comparison">
@@ -287,81 +346,42 @@ function LatencyComparison({
           </tr>
         </thead>
         <tbody>
-          {Array.from({ length: maxSteps }, (_, i) => {
-            const http = httpStats.stepTtfbs[i];
-            const ws = wsStats.stepTtfbs[i];
-            const diff = http != null && ws != null ? ws - http : null;
+          {pairedHttp.map((http, i) => {
+            const ws = pairedWs[i];
+            const diff = ws - http;
             return (
               <tr key={i}>
                 <td>Step {i + 1}</td>
-                <td>{http != null ? `${(http / 1000).toFixed(3)}s` : '—'}</td>
-                <td>{ws != null ? `${(ws / 1000).toFixed(3)}s` : '—'}</td>
-                <td
-                  className={
-                    diff != null ? (diff > 0 ? 'slower' : 'faster') : ''
-                  }
-                >
-                  {diff != null ? formatDiff(diff, http ?? null) : '—'}
+                <td>{(http / 1000).toFixed(3)}s</td>
+                <td>{(ws / 1000).toFixed(3)}s</td>
+                <td className={diff > 0 ? 'slower' : 'faster'}>
+                  {formatDiff(diff, http)}
                 </td>
               </tr>
             );
           })}
           <tr className="total-row">
             <td>Total</td>
-            <td>
-              {httpTtfbSum != null
-                ? `${(httpTtfbSum / 1000).toFixed(3)}s`
-                : '—'}
-            </td>
-            <td>
-              {wsTtfbSum != null ? `${(wsTtfbSum / 1000).toFixed(3)}s` : '—'}
-            </td>
-            <td
-              className={
-                totalDiff != null
-                  ? totalDiff > 0
-                    ? 'slower'
-                    : 'faster'
-                  : ''
-              }
-            >
-              {totalDiff != null ? formatDiff(totalDiff, httpTtfbSum) : '—'}
+            <td>{(httpTtfbSum / 1000).toFixed(3)}s</td>
+            <td>{(wsTtfbSum / 1000).toFixed(3)}s</td>
+            <td className={totalDiff > 0 ? 'slower' : 'faster'}>
+              {formatDiff(totalDiff, httpTtfbSum)}
             </td>
           </tr>
           <tr className="summary-row">
             <td>Avg</td>
-            <td>
-              {httpAvg != null ? `${(httpAvg / 1000).toFixed(3)}s` : '—'}
-            </td>
-            <td>{wsAvg != null ? `${(wsAvg / 1000).toFixed(3)}s` : '—'}</td>
-            <td
-              className={
-                avgDiff != null ? (avgDiff > 0 ? 'slower' : 'faster') : ''
-              }
-            >
-              {avgDiff != null ? formatDiff(avgDiff, httpAvg) : '—'}
+            <td>{(httpAvg / 1000).toFixed(3)}s</td>
+            <td>{(wsAvg / 1000).toFixed(3)}s</td>
+            <td className={avgDiff > 0 ? 'slower' : 'faster'}>
+              {formatDiff(avgDiff, httpAvg)}
             </td>
           </tr>
           <tr className="summary-row">
             <td>Median</td>
-            <td>
-              {httpMedian != null
-                ? `${(httpMedian / 1000).toFixed(3)}s`
-                : '—'}
-            </td>
-            <td>
-              {wsMedian != null ? `${(wsMedian / 1000).toFixed(3)}s` : '—'}
-            </td>
-            <td
-              className={
-                medianDiff != null
-                  ? medianDiff > 0
-                    ? 'slower'
-                    : 'faster'
-                  : ''
-              }
-            >
-              {medianDiff != null ? formatDiff(medianDiff, httpMedian) : '—'}
+            <td>{(httpMedian / 1000).toFixed(3)}s</td>
+            <td>{(wsMedian / 1000).toFixed(3)}s</td>
+            <td className={medianDiff > 0 ? 'slower' : 'faster'}>
+              {formatDiff(medianDiff, httpMedian)}
             </td>
           </tr>
         </tbody>
@@ -369,6 +389,59 @@ function LatencyComparison({
     </div>
   );
 }
+
+interface Turn {
+  user?: UIMessage;
+  httpAssistant?: UIMessage;
+  wsAssistant?: UIMessage;
+}
+
+function buildTurns(httpMessages: UIMessage[], wsMessages: UIMessage[]): Turn[] {
+  const turns: Turn[] = [];
+  const httpByRole = groupByRole(httpMessages);
+  const wsByRole = groupByRole(wsMessages);
+  const maxLen = Math.max(httpByRole.length, wsByRole.length);
+  for (let i = 0; i < maxLen; i++) {
+    const httpPair = httpByRole[i];
+    const wsPair = wsByRole[i];
+    turns.push({
+      user: httpPair?.user ?? wsPair?.user,
+      httpAssistant: httpPair?.assistant,
+      wsAssistant: wsPair?.assistant,
+    });
+  }
+  return turns;
+}
+
+function groupByRole(
+  messages: UIMessage[],
+): { user?: UIMessage; assistant?: UIMessage }[] {
+  const pairs: { user?: UIMessage; assistant?: UIMessage }[] = [];
+  let current: { user?: UIMessage; assistant?: UIMessage } = {};
+  for (const m of messages) {
+    if (m.role === 'user') {
+      if (current.user || current.assistant) {
+        pairs.push(current);
+        current = {};
+      }
+      current.user = m;
+    } else if (m.role === 'assistant') {
+      current.assistant = m;
+      pairs.push(current);
+      current = {};
+    }
+  }
+  if (current.user || current.assistant) {
+    pairs.push(current);
+  }
+  return pairs;
+}
+
+const DEFAULT_PROMPT =
+  'What are all the different ways to handle streaming in the AI SDK? Find every doc that mentions streaming, summarize the different approaches, and show example code for each.';
+
+const SECOND_PROMPT =
+  'Create a new doc file at /workspace/docs/provider-comparison.mdx that compares every AI provider supported by the SDK. For each provider, include: supported models, configuration options, and a basic usage example. Base everything on what\'s already in the docs.';
 
 export default function Chat() {
   const wsChat = useChat({ transport: wsTransport, id: 'ws' });
@@ -380,6 +453,12 @@ export default function Chat() {
   const [httpStatsMap, setHttpStatsMap] = useState<
     Record<string, ResponseStats>
   >({});
+  const [inputValue, setInputValue] = useState(DEFAULT_PROMPT);
+  const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [expandedTurns, setExpandedTurns] = useState<Set<number>>(new Set());
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
 
   useEffect(() => {
     wsTransport.onStatsUpdate = (messageId, stats) => {
@@ -394,34 +473,59 @@ export default function Chat() {
     };
   }, []);
 
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      isAtBottomRef.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const autoResize = useCallback(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+  }, []);
+
+  useEffect(() => {
+    autoResize();
+  }, [inputValue, autoResize]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && isAtBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [wsChat.messages, httpChat.messages]);
+
   const isReady = wsChat.status === 'ready' && httpChat.status === 'ready';
   const isBusy = !isReady;
 
-  // Find latest completed pair for comparison
-  const wsAssistants = wsChat.messages.filter(m => m.role === 'assistant');
-  const httpAssistants = httpChat.messages.filter(
-    m => m.role === 'assistant',
-  );
-  const latestWsStats =
-    wsAssistants.length > 0
-      ? wsStatsMap[wsAssistants[wsAssistants.length - 1].id]
-      : undefined;
-  const latestHttpStats =
-    httpAssistants.length > 0
-      ? httpStatsMap[httpAssistants[httpAssistants.length - 1].id]
-      : undefined;
-  const showComparison =
-    latestWsStats?.endTime != null && latestHttpStats?.endTime != null;
+  function toggleTurnExpanded(turnIndex: number) {
+    setExpandedTurns(prev => {
+      const next = new Set(prev);
+      if (next.has(turnIndex)) next.delete(turnIndex);
+      else next.add(turnIndex);
+      return next;
+    });
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const input = (e.currentTarget as HTMLFormElement).elements.namedItem(
-      'message',
-    ) as HTMLInputElement;
-    if (input.value.trim()) {
-      wsChat.sendMessage({ text: input.value });
-      httpChat.sendMessage({ text: input.value });
-      input.value = '';
+    if (inputValue.trim()) {
+      wsChat.sendMessage({ text: inputValue });
+      httpChat.sendMessage({ text: inputValue });
+
+      if (!hasSubmitted) {
+        setHasSubmitted(true);
+        setInputValue(SECOND_PROMPT);
+      } else {
+        setInputValue('');
+      }
     }
   }
 
@@ -430,53 +534,105 @@ export default function Chat() {
     httpChat.stop();
   }
 
+  const turns = buildTurns(httpChat.messages, wsChat.messages);
+
   return (
     <div className="chat-container">
-      <div className="chat-columns">
-        <div className="chat-column">
-          <div className="column-header">HTTP</div>
-          <MessageList messages={httpChat.messages} statsMap={httpStatsMap} />
+      <div className="chat-scroll-area" ref={scrollRef}>
+        <div className="column-labels">
+          <div className="column-label-spacer" />
+          <div className="column-label">HTTP</div>
+          <div className="column-label">WebSocket</div>
         </div>
-        <div className="chat-column">
-          <div className="column-header">WebSocket</div>
-          <MessageList messages={wsChat.messages} statsMap={wsStatsMap} />
-        </div>
+        {turns.map((turn, i) => {
+          const httpStats = turn.httpAssistant
+            ? httpStatsMap[turn.httpAssistant.id]
+            : undefined;
+          const wsStats = turn.wsAssistant
+            ? wsStatsMap[turn.wsAssistant.id]
+            : undefined;
+          const expanded = expandedTurns.has(i);
+          const toggle = () => toggleTurnExpanded(i);
+
+          return (
+            <div key={i} className="turn">
+              {turn.user && (
+                <div className="message user">
+                  {turn.user.parts.map((p, j) =>
+                    p.type === 'text' ? <span key={j}>{p.text}</span> : null,
+                  )}
+                </div>
+              )}
+              {(turn.httpAssistant || turn.wsAssistant) && (
+                <div className="response-columns">
+                  <div className="response-column">
+                    {turn.httpAssistant && (
+                      <AssistantMessage
+                        message={turn.httpAssistant}
+                        stats={httpStats}
+                        expanded={expanded}
+                        onToggle={toggle}
+                      />
+                    )}
+                  </div>
+                  <div className="response-column">
+                    {turn.wsAssistant && (
+                      <AssistantMessage
+                        message={turn.wsAssistant}
+                        stats={wsStats}
+                        expanded={expanded}
+                        onToggle={toggle}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+              {httpStats && wsStats && (
+                <LatencyComparison httpStats={httpStats} wsStats={wsStats} />
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      {showComparison && (
-        <LatencyComparison
-          httpStats={latestHttpStats!}
-          wsStats={latestWsStats!}
-        />
-      )}
+      <div className="input-bar">
+        {isBusy && (
+          <div className="status">
+            {(wsChat.status === 'submitted' ||
+              httpChat.status === 'submitted') && <span>Thinking...</span>}
+            <button className="stop-button" onClick={handleStop}>
+              Stop
+            </button>
+          </div>
+        )}
 
-      {isBusy && (
-        <div className="status">
-          {(wsChat.status === 'submitted' ||
-            httpChat.status === 'submitted') && <div>Thinking...</div>}
-          <button className="stop-button" onClick={handleStop}>
-            Stop
+        {(wsChat.error || httpChat.error) && (
+          <div className="error">
+            Error: {wsChat.error?.message || httpChat.error?.message}
+          </div>
+        )}
+
+        <form className="input-form" onSubmit={handleSubmit}>
+          <textarea
+            ref={textareaRef}
+            name="message"
+            placeholder="Type a message..."
+            disabled={!isReady}
+            value={inputValue}
+            onChange={e => setInputValue(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            rows={1}
+          />
+          <button type="submit" disabled={!isReady}>
+            Send
           </button>
-        </div>
-      )}
-
-      {(wsChat.error || httpChat.error) && (
-        <div className="error">
-          Error: {wsChat.error?.message || httpChat.error?.message}
-        </div>
-      )}
-
-      <form className="input-form" onSubmit={handleSubmit}>
-        <input
-          name="message"
-          placeholder="Type a message..."
-          disabled={!isReady}
-          defaultValue="What are all the different ways to handle streaming in the AI SDK? Find every doc that mentions streaming, summarize the different approaches, and show example code for each."
-        />
-        <button type="submit" disabled={!isReady}>
-          Send
-        </button>
-      </form>
+        </form>
+      </div>
     </div>
   );
 }
