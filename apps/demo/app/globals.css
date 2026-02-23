@@ -65,7 +65,10 @@ body {
   top: 0;
   z-index: 10;
   background: #f9fafb;
-  padding-bottom: 0.5rem;
+  padding: 0.5rem 0;
+  margin: 0 -1rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
 }
 
 
@@ -86,6 +89,7 @@ body {
 /* Turn layout */
 .turn {
   margin-bottom: 0.75rem;
+  padding-left: calc(28px + 1rem);
 }
 
 .response-columns {
