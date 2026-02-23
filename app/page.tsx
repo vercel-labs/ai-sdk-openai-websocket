@@ -443,6 +443,145 @@ const DEFAULT_PROMPT =
 const SECOND_PROMPT =
   'Create a new doc file at /workspace/docs/provider-comparison.mdx that compares every AI provider supported by the SDK. For each provider, include: supported models, configuration options, and a basic usage example. Base everything on what\'s already in the docs.';
 
+type DiffLine = { text: string; type: 'add' | 'remove' | 'context' };
+
+function DiffBlock({ lines }: { lines: DiffLine[] }) {
+  return (
+    <pre className="sidebar-code sidebar-diff">
+      {lines.map((line, i) => {
+        const prefix = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ';
+        const className =
+          line.type === 'add'
+            ? 'diff-add'
+            : line.type === 'remove'
+              ? 'diff-remove'
+              : 'diff-context';
+        return (
+          <span key={i} className={className}>
+            {prefix} {line.text}
+          </span>
+        );
+      })}
+    </pre>
+  );
+}
+
+function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) return null;
+
+  return (
+    <div className="sidebar-overlay" onClick={onClose}>
+      <aside className="sidebar" onClick={e => e.stopPropagation()}>
+        <div className="sidebar-header">
+          <h2>About this demo</h2>
+          <button className="sidebar-close" onClick={onClose} aria-label="Close">&times;</button>
+        </div>
+        <div className="sidebar-body">
+          <section>
+            <h3>What is this?</h3>
+            <p>
+              This demo compares OpenAI&rsquo;s <strong>HTTP</strong> and <strong>WebSocket</strong> streaming
+              APIs side by side. When you submit a prompt, it runs against both transports simultaneously
+              so you can compare their Time-to-First-Byte (TTFB) performance in real time.
+            </p>
+          </section>
+
+          <section>
+            <h3>The agent</h3>
+            <p>
+              The AI agent has access to a <strong>virtual file system</strong> pre-loaded with all of the
+              Vercel AI SDK documentation as markdown files. It can read, search, and write files using
+              bash-like tools (<code>bash</code>, <code>readFile</code>, <code>writeFile</code>).
+            </p>
+          </section>
+
+          <section>
+            <h3>Why WebSocket?</h3>
+            <p>
+              OpenAI&rsquo;s WebSocket API keeps a persistent connection open. The key benefits:
+            </p>
+            <ul>
+              <li><strong>No per-request handshake</strong> &mdash; after the initial connection, subsequent requests skip TCP/TLS/HTTP negotiation entirely</li>
+              <li><strong>Lower TTFB on multi-step tool calls</strong> &mdash; in agentic workflows with many tool calls, each step reuses the open connection</li>
+              <li><strong>Reduced overhead</strong> &mdash; no HTTP headers on each request/response cycle</li>
+            </ul>
+            <p>
+              The <strong>first request is slower</strong> for WebSocket because it must establish the
+              connection (DNS + TCP + TLS + WebSocket upgrade). After that, subsequent steps are faster
+              since the connection is already open.
+            </p>
+          </section>
+
+          <section>
+            <h3>Implementation</h3>
+            <p>
+              The standard HTTP route is in <a
+                href="https://github.com/vercel-labs/ai-sdk-openai-websocket-demo/blob/main/app/api/chat/route.ts"
+                target="_blank"
+                rel="noopener noreferrer"
+              >app/api/chat/route.ts</a>.
+              To use the WebSocket API instead, only a few lines change:
+            </p>
+            <DiffBlock lines={[
+              { text: "import {", type: 'context' },
+              { text: "  streamText,", type: 'context' },
+              { text: "  type UIMessage,", type: 'context' },
+              { text: "  convertToModelMessages,", type: 'context' },
+              { text: "  stepCountIs,", type: 'context' },
+              { text: "} from 'ai';", type: 'context' },
+              { text: "import { openai } from '@ai-sdk/openai';", type: 'remove' },
+              { text: "import { createOpenAI } from '@ai-sdk/openai';", type: 'add' },
+              { text: "import { createWebSocketFetch }", type: 'add' },
+              { text: "  from 'ai-sdk-openai-websocket-fetch';", type: 'add' },
+              { text: "import {", type: 'context' },
+              { text: "  MODEL_ID, MAX_STEPS,", type: 'context' },
+              { text: "  SYSTEM_PROMPT, createTools,", type: 'context' },
+              { text: "} from '@/lib/chat-api';", type: 'context' },
+              { text: "", type: 'context' },
+              { text: "export async function POST(req: Request) {", type: 'context' },
+              { text: "  const { messages }: { messages: UIMessage[] }", type: 'context' },
+              { text: "    = await req.json();", type: 'context' },
+              { text: "", type: 'context' },
+              { text: "  const wsFetch = createWebSocketFetch();", type: 'add' },
+              { text: "  const openai = createOpenAI({ fetch: wsFetch });", type: 'add' },
+              { text: "  const tools = await createTools();", type: 'context' },
+              { text: "", type: 'context' },
+              { text: "  const result = streamText({", type: 'context' },
+              { text: "    model: openai(MODEL_ID),", type: 'context' },
+              { text: "    system: SYSTEM_PROMPT,", type: 'context' },
+              { text: "    messages: await convertToModelMessages(messages),", type: 'context' },
+              { text: "    tools,", type: 'context' },
+              { text: "    stopWhen: stepCountIs(MAX_STEPS),", type: 'context' },
+              { text: "    onFinish: () => wsFetch.close(),", type: 'add' },
+              { text: "  });", type: 'context' },
+              { text: "", type: 'context' },
+              { text: "  return result.toUIMessageStreamResponse();", type: 'context' },
+              { text: "}", type: 'context' },
+            ]} />
+          </section>
+
+          <section>
+            <h3>Demo prompts</h3>
+            <p>
+              The input is pre-filled with a prompt designed to trigger ~10 tool calls (searching and
+              reading docs about streaming). After submitting, a second prompt is loaded that triggers
+              ~20 tool calls (creating a provider comparison doc), so you can compare performance
+              across different workload sizes.
+            </p>
+          </section>
+        </div>
+        <div className="sidebar-footer">
+          <a
+            href="https://github.com/vercel-labs/ai-sdk-openai-websocket-demo"
+            target="_blank"
+            rel="noopener noreferrer"
+          >View on GitHub</a>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 export default function Chat() {
   const wsChat = useChat({ transport: wsTransport, id: 'ws' });
   const httpChat = useChat({ transport: httpTransport, id: 'http' });
@@ -456,6 +595,7 @@ export default function Chat() {
   const [inputValue, setInputValue] = useState(DEFAULT_PROMPT);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [expandedTurns, setExpandedTurns] = useState<Set<number>>(new Set());
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -538,9 +678,15 @@ export default function Chat() {
 
   return (
     <div className="chat-container">
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="chat-scroll-area" ref={scrollRef}>
         <div className="column-labels">
-          <div className="column-label-spacer" />
+          <button
+            className="sidebar-toggle"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="About this demo"
+            title="About this demo"
+          >?</button>
           <div className="column-label">HTTP</div>
           <div className="column-label">WebSocket</div>
         </div>
