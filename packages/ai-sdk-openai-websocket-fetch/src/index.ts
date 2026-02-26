@@ -125,12 +125,16 @@ export function createWebSocketFetch(
 
         function onMessage(data: WebSocket.RawData) {
           const text = data.toString();
-          controller.enqueue(encoder.encode(`data: ${text}\n\n`));
+          const lines = text.split(/\r?\n/);
+          const sseData = lines.map(line => `data: ${line}`).join('\n');
+          controller.enqueue(encoder.encode(`${sseData}\n\n`));
 
           try {
             const event = JSON.parse(text);
             if (
               event.type === 'response.completed' ||
+              event.type === 'response.failed' ||
+              event.type === 'response.incomplete' ||
               event.type === 'error'
             ) {
               controller.enqueue(encoder.encode('data: [DONE]\n\n'));
