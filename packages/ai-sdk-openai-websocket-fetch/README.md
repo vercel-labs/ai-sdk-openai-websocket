@@ -25,6 +25,11 @@ const result = streamText({
 });
 ```
 
+An idle connection is reused only for requests with the same `Authorization`
+header. Concurrent requests use separate connections, including while a
+connection is opening. The wrapper retains at most one idle connection; call
+`wsFetch.close()` when finished to close all of its open and pending connections.
+
 ## Why?
 
 OpenAI's WebSocket API keeps a persistent connection open. After the initial handshake, subsequent requests skip TCP/TLS/HTTP negotiation entirely — reducing TTFB in multi-step agentic workflows where the model makes many tool calls.
