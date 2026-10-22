@@ -16,8 +16,8 @@ export interface CreateWebSocketFetchOptions {
  * through to the standard `fetch`.
  *
  * The connection is created lazily on the first streaming request and
- * reused for subsequent ones, which is the main source of latency
- * savings in multi-step tool-calling workflows.
+ * reused for subsequent requests with the same Authorization header, reducing
+ * latency in multi-step tool-calling workflows.
  *
  * @example
  * ```ts
@@ -39,44 +39,66 @@ export function createWebSocketFetch(
 ) {
   const wsUrl = options?.url ?? 'wss://api.openai.com/v1/responses';
 
-  let ws: WebSocket | null = null;
-  let connecting: Promise<WebSocket> | null = null;
-  let busy = false;
+  interface Connection {
+    socket: WebSocket;
+    authorization: string;
+    busy: boolean;
+  }
 
-  function getConnection(authorization: string): Promise<WebSocket> {
-    if (ws?.readyState === WebSocket.OPEN && !busy) {
-      return Promise.resolve(ws);
+  let cached: Connection | null = null;
+  const connections = new Set<Connection>();
+
+  function forget(connection: Connection) {
+    connections.delete(connection);
+    if (cached === connection) cached = null;
+  }
+
+  function closeConnection(connection: Connection) {
+    forget(connection);
+    if (connection.socket.readyState === WebSocket.CONNECTING) {
+      connection.socket.terminate();
+    } else if (connection.socket.readyState === WebSocket.OPEN) {
+      connection.socket.close();
+    }
+  }
+
+  function getConnection(authorization: string): Promise<Connection> {
+    if (
+      cached?.socket.readyState === WebSocket.OPEN &&
+      cached.authorization === authorization &&
+      !cached.busy
+    ) {
+      // Reserve the socket before yielding to another caller.
+      cached.busy = true;
+      return Promise.resolve(cached);
     }
 
-    if (connecting && !busy) return connecting;
+    if (cached && !cached.busy) closeConnection(cached);
 
-    connecting = new Promise<WebSocket>((resolve, reject) => {
-      const socket = new WebSocket(wsUrl, {
-        headers: {
-          Authorization: authorization,
-          'OpenAI-Beta': 'responses_websockets=2026-02-06',
-        },
-      });
+    const socket = new WebSocket(wsUrl, {
+      headers: {
+        Authorization: authorization,
+        'OpenAI-Beta': 'responses_websockets=2026-02-06',
+      },
+    });
+    const connection = { socket, authorization, busy: true };
+    connections.add(connection);
+    cached = connection;
 
-      socket.on('open', () => {
-        ws = socket;
-        connecting = null;
-        resolve(socket);
-      });
+    // An in-flight handshake is owned by its caller, just like an open socket.
+    return new Promise<Connection>((resolve, reject) => {
+      socket.once('open', () => resolve(connection));
 
       socket.on('error', err => {
-        if (connecting) {
-          connecting = null;
-          reject(err);
-        }
+        forget(connection);
+        reject(err);
       });
 
       socket.on('close', () => {
-        if (ws === socket) ws = null;
+        forget(connection);
+        reject(new Error('WebSocket closed before opening'));
       });
     });
-
-    return connecting;
   }
 
   async function websocketFetch(
@@ -108,19 +130,27 @@ export function createWebSocketFetch(
     const headers = normalizeHeaders(init.headers);
     const authorization = headers['authorization'] ?? '';
 
-    const connection = await getConnection(authorization);
-    busy = true;
+    const state = await getConnection(authorization);
+    const connection = state.socket;
 
     const { stream: _, ...requestBody } = body;
     const encoder = new TextEncoder();
+    let cancelStream: (() => void) | undefined;
 
     const responseStream = new ReadableStream<Uint8Array>({
       start(controller) {
-        function cleanup() {
+        let finished = false;
+
+        function cleanup(reusable = true) {
+          if (finished) return false;
+          finished = true;
           connection.off('message', onMessage);
           connection.off('error', onError);
           connection.off('close', onClose);
-          busy = false;
+          init?.signal?.removeEventListener('abort', onAbort);
+          state.busy = false;
+          if (!reusable || cached !== state) closeConnection(state);
+          return true;
         }
 
         function onMessage(data: WebSocket.RawData) {
@@ -147,52 +177,48 @@ export function createWebSocketFetch(
         }
 
         function onError(err: Error) {
-          cleanup();
-          controller.error(err);
+          if (cleanup(false)) controller.error(err);
         }
 
         function onClose() {
-          cleanup();
-          try {
-            controller.close();
-          } catch {
-            // already closed
-          }
+          if (cleanup(false)) controller.close();
         }
 
+        function onAbort() {
+          if (!cleanup(false)) return;
+          controller.error(
+            init?.signal?.reason ?? new DOMException('Aborted', 'AbortError'),
+          );
+        }
+
+        cancelStream = () => {
+          cleanup(false);
+        };
         connection.on('message', onMessage);
         connection.on('error', onError);
         connection.on('close', onClose);
 
         if (init?.signal) {
           if (init.signal.aborted) {
-            cleanup();
-            controller.error(
-              init.signal.reason ??
-                new DOMException('Aborted', 'AbortError'),
-            );
+            onAbort();
             return;
           }
-          init.signal.addEventListener(
-            'abort',
-            () => {
-              cleanup();
-              try {
-                controller.error(
-                  init!.signal!.reason ??
-                    new DOMException('Aborted', 'AbortError'),
-                );
-              } catch {
-                // already closed
-              }
-            },
-            { once: true },
-          );
+          init.signal.addEventListener('abort', onAbort, { once: true });
         }
 
-        connection.send(
-          JSON.stringify({ type: 'response.create', ...requestBody }),
-        );
+        try {
+          connection.send(
+            JSON.stringify({ type: 'response.create', ...requestBody }),
+            err => {
+              if (err) onError(err);
+            },
+          );
+        } catch (err) {
+          onError(err instanceof Error ? err : new Error(String(err)));
+        }
+      },
+      cancel() {
+        cancelStream?.();
       },
     });
 
@@ -203,12 +229,9 @@ export function createWebSocketFetch(
   }
 
   return Object.assign(websocketFetch, {
-    /** Close the underlying WebSocket connection. */
+    /** Close all underlying WebSocket connections, including pending ones. */
     close() {
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
+      for (const connection of connections) closeConnection(connection);
     },
   });
 }

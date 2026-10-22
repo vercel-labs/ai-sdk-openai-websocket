@@ -24,6 +24,7 @@
   ],
   "scripts": {
     "build": "tsup",
+    "test": "tsup && node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
