@@ -1,5 +1,9 @@
 # ai-sdk-openai-websocket-fetch
 
+> **Deprecated:** This demo package is no longer maintained. WebSocket support is
+> now built into [AI SDK](https://ai-sdk.dev). Use AI SDK directly instead of
+> `ai-sdk-openai-websocket-fetch` or `@vercel/ai-sdk-openai-websocket-fetch`.
+
 Drop-in `fetch` replacement that routes OpenAI Responses API streaming requests through a persistent WebSocket connection instead of HTTP.
 
 ## Installation
